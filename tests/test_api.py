@@ -66,5 +66,28 @@ def test_transient_failure_is_retried(samples):
     assert job["status"] == "completed" and job["attempts"] == 2
 
 
+def test_invalid_language_rejected_upfront(client, samples):
+    # Swagger UI fills empty fields with "string"; that must be a 400, not a queued job.
+    r = _upload(client, samples / "short.mp3", language="string")
+    assert r.status_code == 400 and "unsupported language" in r.json()["detail"]
+
+
+def test_language_code_is_normalized(client, samples):
+    r = _upload(client, samples / "short.mp3", language=" EN ", wait="true")
+    assert r.status_code == 200 and r.json()["result"]["language"] == "en"
+
+
+def test_permanent_error_is_not_retried(samples):
+    class BadInput(FakeTranscriber):
+        def transcribe(self, *a, **kw):
+            self.calls += 1
+            raise ValueError("invalid input")
+
+    service = Service(pipeline_factory=lambda: Pipeline(BadInput()))
+    with TestClient(create_app(service)) as c:
+        job = _upload(c, samples / "short.mp3", wait="true").json()
+    assert job["status"] == "failed" and job["attempts"] == 1
+
+
 def test_unknown_job_is_404(client):
     assert client.get("/v1/transcriptions/nope").status_code == 404

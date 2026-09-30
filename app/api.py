@@ -24,7 +24,7 @@ from app.config import settings
 from app.formats import to_srt, to_vtt
 from app.pipeline import Options, Pipeline
 from app.store import JobStore
-from app.transcriber import get_transcriber
+from app.transcriber import SUPPORTED_LANGUAGES, get_transcriber
 
 log = logging.getLogger(__name__)
 MAX_ATTEMPTS = 3
@@ -59,8 +59,8 @@ class Service:
                 )
                 self.store.update(job_id, status="completed", result=result)
                 return
-            except audio.InvalidAudioError as e:
-                # Permanent: the file itself is the problem, retrying won't help.
+            except (audio.InvalidAudioError, ValueError) as e:
+                # Permanent: bad file or bad input. Retrying the same thing won't help.
                 self.store.update(job_id, status="failed", error=str(e))
                 return
             except Exception as e:  # transient: crash, OOM, disk hiccup
@@ -101,7 +101,10 @@ def create_app(service: Service | None = None) -> FastAPI:
         wait: bool = Form(False, description=f"Return the transcript inline (only for clips up to {settings.single_pass_max_s:.0f}s)."),
     ):
         svc: Service = app.state.service
-        options = Options(language=language or None, word_timestamps=word_timestamps, split_channels=split_channels)
+        language = (language or "").strip().lower() or None
+        if language and language not in SUPPORTED_LANGUAGES:
+            raise HTTPException(400, f"unsupported language '{language}', use an ISO code like 'en' or leave empty")
+        options = Options(language=language, word_timestamps=word_timestamps, split_channels=split_channels)
 
         tmp = svc.upload_dir / f"incoming-{id(file)}"
         size = await run_in_threadpool(_save_limited, file, tmp, settings.max_upload_mb * 1024 * 1024)
